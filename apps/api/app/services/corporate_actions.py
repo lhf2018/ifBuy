@@ -57,6 +57,12 @@ def apply_dividend(
     db.commit()
     db.refresh(adj)
     try:
+        from app.services.trading import invalidate_positions_cache
+
+        invalidate_positions_cache(account_id)
+    except Exception:
+        pass
+    try:
         from app.services.equity import take_snapshot
 
         take_snapshot(db, account_id)
@@ -117,6 +123,12 @@ def apply_split(
     db.add(adj)
     db.commit()
     db.refresh(adj)
+    try:
+        from app.services.trading import invalidate_positions_cache
+
+        invalidate_positions_cache(account_id)
+    except Exception:
+        pass
     try:
         from app.services.equity import take_snapshot
 

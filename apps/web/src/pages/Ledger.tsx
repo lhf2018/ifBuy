@@ -51,7 +51,7 @@ export function Ledger() {
   const [cashErr, setCashErr] = useState<string | null>(null)
 
   const needsAccount = section !== 'create'
-  const { data: summary, refetch } = useQuery({
+  const { data: summary, refetch, isFetching: summaryFetching } = useQuery({
     queryKey: ['summary', accountId],
     queryFn: () => api.summary(accountId!),
     enabled: !!accountId && needsAccount,
@@ -61,7 +61,7 @@ export function Ledger() {
     queryKey: ['fx-rate', fxFrom, fxTo],
     queryFn: () => api.fxRate(fxFrom, fxTo),
     enabled: !!accountId && section === 'overview' && fxFrom !== fxTo,
-    refetchInterval: 60_000,
+    refetchInterval: 120_000,
   })
 
   const { data: equityPoints = [] } = useQuery({
@@ -70,30 +70,30 @@ export function Ledger() {
     enabled: !!accountId && section === 'overview',
   })
 
-  const { data: risk } = useQuery({
+  const { data: risk, isFetching: riskFetching } = useQuery({
     queryKey: ['risk', accountId],
     queryFn: () => api.risk(accountId!),
     enabled: !!accountId && section === 'overview',
-    refetchInterval: 60_000,
+    refetchInterval: 120_000,
   })
 
-  const { data: positions = [], isLoading: posLoading } = useQuery({
+  const { data: positions = [], isLoading: posLoading, isFetching: posFetching } = useQuery({
     queryKey: ['positions', accountId],
     queryFn: () => api.positions(accountId!),
-    enabled: !!accountId && (section === 'positions' || section === 'overview'),
-    refetchInterval: 60_000,
+    enabled: !!accountId && section === 'positions',
+    refetchInterval: 120_000,
   })
 
   const allocation = useMemo(() => {
     const base = summary?.currency || account?.currency || 'CNY'
     const rows: { key: MarketKey; label: string; value: number }[] = []
     const bucket: Partial<Record<MarketKey, number>> = {}
-    for (const p of positions) {
-      if (p.market_value == null) continue
-      const mk = positionMarket(p)
-      // market_value is in instrument currency; risk uses base — approximate via summary wallets FX not available here.
-      // Prefer risk holdings if present; else sum raw and label (UI shows share of summed MV).
-      bucket[mk] = (bucket[mk] || 0) + p.market_value
+    // Prefer risk holdings (base currency) so overview doesn't depend on positions API
+    if (risk?.holdings?.length) {
+      for (const h of risk.holdings) {
+        const mk = positionMarket({ symbol: h.symbol, name: h.name })
+        bucket[mk] = (bucket[mk] || 0) + h.market_value_base
+      }
     }
     const total = Object.values(bucket).reduce((a, b) => a + (b || 0), 0)
     for (const m of MARKETS) {
@@ -102,7 +102,7 @@ export function Ledger() {
     }
     rows.sort((a, b) => b.value - a.value)
     return { rows, total, base }
-  }, [positions, summary?.currency, account?.currency])
+  }, [risk?.holdings, summary?.currency, account?.currency])
 
   const { data: orders = [] } = useQuery({
     queryKey: ['orders', accountId],
@@ -287,9 +287,13 @@ export function Ledger() {
       {section === 'overview' && accountId && (
         <>
           <section className="surface">
-            <div className="muted">{summary?.name || account?.name}</div>
+            <div className="muted">
+              {summary?.name || account?.name}
+              {summaryFetching && !summary ? ' · 加载中…' : ''}
+              {summaryFetching && summary ? ' · 更新中…' : ''}
+            </div>
             <div className="hero-equity">
-              {money(summary?.total_equity, summary?.currency)}
+              {money(summary?.total_equity ?? account?.cash_balance, summary?.currency || account?.currency)}
             </div>
             <div className={`hero-pnl ${pnlClass(summary?.total_pnl)}`}>
               <span className="hero-pnl-label">总收益</span>
@@ -298,6 +302,29 @@ export function Ledger() {
               </span>
               {summary?.return_pct != null && (
                 <span className="pct-tag">{pct(summary.return_pct)}</span>
+              )}
+            </div>
+            <div className="period-pnl-row">
+              <div className={`period-pnl ${pnlClass(summary?.day_pnl)}`}>
+                <span className="period-pnl-label">今日</span>
+                <strong className="num">{moneySigned(summary?.day_pnl, summary?.currency)}</strong>
+                {summary?.day_pnl_pct != null && <span className="muted">{pct(summary.day_pnl_pct)}</span>}
+              </div>
+              <div className={`period-pnl ${pnlClass(summary?.week_pnl)}`}>
+                <span className="period-pnl-label">本周</span>
+                <strong className="num">{moneySigned(summary?.week_pnl, summary?.currency)}</strong>
+                {summary?.week_pnl_pct != null && <span className="muted">{pct(summary.week_pnl_pct)}</span>}
+              </div>
+              {summary?.hk_connect && (
+                <div className="period-pnl">
+                  <span className="period-pnl-label">港股通额度</span>
+                  <strong className="num">
+                    ¥{Math.round(summary.hk_connect.remaining_cny).toLocaleString()}
+                  </strong>
+                  <span className="muted">
+                    / ¥{Math.round(summary.hk_connect.quota_cny).toLocaleString()}
+                  </span>
+                </div>
               )}
             </div>
             <div className="stat-grid">
@@ -360,7 +387,8 @@ export function Ledger() {
 
           <section className="surface">
             <h2 className="section-title">风险提示</h2>
-            {!risk && <p className="muted">加载中…</p>}
+            {!risk && riskFetching && <p className="muted">风险数据加载中…</p>}
+            {!risk && !riskFetching && <p className="muted">风险数据暂时不可用</p>}
             {risk && (
               <>
                 <div className="stat-grid" style={{ marginTop: 0 }}>
@@ -537,14 +565,15 @@ export function Ledger() {
             ))}
           </div>
           <section className="surface">
-            {posLoading && <p className="muted">加载中…</p>}
+            {posLoading && !positions.length && <p className="muted">持仓加载中…</p>}
+            {posFetching && !!positions.length && <p className="muted">行情更新中…</p>}
             {!filteredPos.length && !posLoading && <div className="empty">暂无持仓</div>}
             {!!filteredPos.length && (
               <table className="data-table">
                 <thead>
                   <tr>
                     <th>标的</th>
-                    <th>数量</th>
+                    <th>数量 / 可卖</th>
                     <th>成本</th>
                     <th>现价</th>
                     <th>现在赚了</th>
@@ -561,14 +590,28 @@ export function Ledger() {
                             <strong>{p.name}</strong>
                           </Link>
                           <span className={`pill ${mk}`}>{marketLabel(mk)}</span>
+                          {(p.locked_qty || 0) > 0 && <span className="pill warn-pill">T+1</span>}
                         </div>
                         <div className="muted">{p.symbol}</div>
                       </td>
-                      <td className="num">{p.qty}</td>
+                      <td className="num">
+                        {p.qty}
+                        {p.t1 ? (
+                          <div className="muted" style={{ fontSize: '0.8rem' }}>
+                            可卖 {p.sellable_qty ?? p.qty}
+                            {(p.locked_qty || 0) > 0 ? ` · 锁定 ${p.locked_qty}` : ''}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="num">{p.avg_cost}</td>
                       <td className="num">
                         {p.price ?? '—'}
                         {p.stale && p.price != null ? ' *' : ''}
+                        {p.day_change_pct != null && (
+                          <div className={pnlClass(p.day_change_pct)} style={{ fontSize: '0.8rem' }}>
+                            {pct(p.day_change_pct)}
+                          </div>
+                        )}
                       </td>
                       <td className={`num ${pnlClass(p.unrealized_pnl)}`}>
                         {p.unrealized_pnl?.toFixed(2) ?? '—'}

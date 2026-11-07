@@ -42,7 +42,22 @@ class Account(Base):
     cash_balance_cents: Mapped[int] = mapped_column(BigInteger, default=0)  # legacy 同步 base 币种余额
     status: Mapped[str] = mapped_column(String(16), default="active")
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON: alert thresholds, hk connect quota, etc.
+    settings_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class HkConnectDaily(Base):
+    """Paper 港股通 daily quota usage (CNY notional)."""
+
+    __tablename__ = "hk_connect_daily"
+    __table_args__ = (UniqueConstraint("account_id", "trade_date", name="uk_hk_connect_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))  # YYYY-MM-DD Asia/Shanghai
+    used_cny_cents: Mapped[int] = mapped_column(BigInteger, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class WalletBalance(Base):

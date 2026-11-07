@@ -27,8 +27,8 @@ _CUST_RE = re.compile(r"^CUST\.[A-Z0-9_-]{1,24}$", re.I)
 _US_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,10}$")
 
 _quote_cache: dict[str, tuple[float, QuoteDTO]] = {}
-_QUOTE_TTL = 10.0
-_executor = ThreadPoolExecutor(max_workers=4)
+_QUOTE_TTL = 45.0
+_executor = ThreadPoolExecutor(max_workers=8)
 
 cn_provider = AkshareCNProvider()
 us_provider = YahooUSProvider()
@@ -372,7 +372,8 @@ def _quote_from_custom(symbol: str) -> QuoteDTO | None:
         db.close()
 
 
-def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
+def _fetch_quote_sync(symbol: str) -> QuoteDTO:
+    """Provider call on the current thread (safe inside the quote thread pool)."""
     symbol = validate_symbol(symbol)
     now = time.time()
     cached = _quote_cache.get(symbol)
@@ -387,11 +388,19 @@ def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
             return q
         raise AppError("QUOTE_UNAVAILABLE", "自定义资产暂无估值，请先更新估值")
     provider = _provider_for(symbol)
+    if provider is None:
+        raise AppError("QUOTE_UNAVAILABLE", "暂无行情，请手填价格")
+    q = provider.get_quote(symbol)
+    _quote_cache[symbol] = (now, q)
+    return q
+
+
+def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
+    symbol = validate_symbol(symbol)
+    cached = _quote_cache.get(symbol)
     try:
-        fut = _executor.submit(provider.get_quote, symbol)
-        q = fut.result(timeout=12)
-        _quote_cache[symbol] = (now, q)
-        return q
+        fut = _executor.submit(_fetch_quote_sync, symbol)
+        return fut.result(timeout=8)
     except Exception:
         if allow_stale and cached:
             q = cached[1]
@@ -400,20 +409,42 @@ def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
         if allow_stale:
             bar_q = _quote_from_last_bar(symbol)
             if bar_q:
-                _quote_cache[symbol] = (now, bar_q)
+                _quote_cache[symbol] = (time.time(), bar_q)
                 return bar_q
         raise AppError("QUOTE_UNAVAILABLE", "暂无行情，请手填价格")
 
 
-def get_quotes(symbols: list[str]) -> list[dict]:
+def get_quotes(symbols: list[str], *, timeout: float = 5.0) -> list[dict]:
+    """Batch quotes in parallel with a single overall deadline (not per-symbol)."""
+    from concurrent.futures import wait
+
     syms = [validate_symbol(s) for s in symbols[:50] if s.strip()]
-    futs = {s: _executor.submit(get_quote, s) for s in syms}
+    if not syms:
+        return []
+    futs = {s: _executor.submit(_fetch_quote_sync, s) for s in syms}
+    wait(list(futs.values()), timeout=timeout)
     out = []
     for s in syms:
-        try:
-            q = futs[s].result(timeout=15)
-            out.append(_quote_dict(q))
-        except Exception:
+        fut = futs[s]
+        qdto = None
+        if fut.done() and not fut.cancelled():
+            try:
+                qdto = fut.result(timeout=0)
+            except Exception:
+                qdto = None
+        if qdto is not None:
+            out.append(_quote_dict(qdto))
+            continue
+        cached = _quote_cache.get(s)
+        if cached:
+            qd = _quote_dict(cached[1])
+            qd["stale"] = True
+            out.append(qd)
+            continue
+        bar_q = _quote_from_last_bar(s)
+        if bar_q:
+            out.append(_quote_dict(bar_q))
+        else:
             out.append({"symbol": s, "price": None, "stale": True, "session": "unknown", "as_of": None})
     return out
 

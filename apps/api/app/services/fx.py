@@ -24,17 +24,24 @@ def get_fx_rate(from_ccy: str, to_ccy: str) -> tuple[float, str]:
     if cached and now - cached[0] < 300:
         return cached[1], "cache"
 
+    fb = {
+        ("USD", "CNY"): 7.2,
+        ("CNY", "USD"): 1 / 7.2,
+        ("HKD", "CNY"): 0.92,
+        ("CNY", "HKD"): 1 / 0.92,
+        ("HKD", "USD"): 0.128,
+        ("USD", "HKD"): 1 / 0.128,
+    }
     try:
         if {from_ccy, to_ccy} <= {"USD", "CNY"}:
             fut = _executor.submit(_fetch_pair, "USDCNY=X")
-            usd_cny = fut.result(timeout=8)  # CNY per 1 USD
+            usd_cny = fut.result(timeout=2)  # keep summary snappy
             rate = usd_cny if (from_ccy == "USD" and to_ccy == "CNY") else 1.0 / usd_cny
         elif {from_ccy, to_ccy} <= {"HKD", "CNY"}:
             fut = _executor.submit(_fetch_pair, "HKDCNY=X")
-            hkd_cny = fut.result(timeout=8)  # CNY per 1 HKD
+            hkd_cny = fut.result(timeout=2)
             rate = hkd_cny if (from_ccy == "HKD" and to_ccy == "CNY") else 1.0 / hkd_cny
         elif {from_ccy, to_ccy} <= {"HKD", "USD"}:
-            # via CNY bridge
             r1, _ = get_fx_rate(from_ccy, "CNY")
             r2, _ = get_fx_rate("CNY", to_ccy)
             rate = r1 * r2
@@ -45,15 +52,8 @@ def get_fx_rate(from_ccy: str, to_ccy: str) -> tuple[float, str]:
     except AppError:
         raise
     except Exception:
-        fb = {
-            ("USD", "CNY"): 7.2,
-            ("CNY", "USD"): 1 / 7.2,
-            ("HKD", "CNY"): 0.92,
-            ("CNY", "HKD"): 1 / 0.92,
-            ("HKD", "USD"): 0.128,
-            ("USD", "HKD"): 1 / 0.128,
-        }
         if (from_ccy, to_ccy) in fb:
+            _cache[key] = (now, fb[(from_ccy, to_ccy)])
             return fb[(from_ccy, to_ccy)], "fallback"
         raise AppError("FX_UNAVAILABLE", "暂时拿不到汇率，请手填汇率后再换。")
 

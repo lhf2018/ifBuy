@@ -25,7 +25,20 @@ from app.services.accounts import (
     wallet_balance_cents,
 )
 from app.services.fees import calc_fee_cents
-from app.services.market import get_instrument, get_quote, validate_symbol
+from app.services.market import get_instrument, get_quote, get_quotes, validate_symbol
+from app.services.rules import (
+    applies_t1,
+    consume_hk_connect_quota,
+    hk_connect_status,
+    is_hk_connect,
+    period_equity_change,
+    sellable_qty_micros,
+)
+
+from app.core.cache import cache_delete_prefix, cache_get, cache_set
+
+_POSITIONS_TTL = 60.0
+_SUMMARY_TTL = 45.0
 
 
 def place_order(
@@ -126,6 +139,9 @@ def place_order(
                     f"{trade_ccy} 现金不够。大约需要 {float(cents_to_money(need))}，还剩 {float(cents_to_money(avail))}。"
                     f"{' 可先在首页换汇。' if trade_ccy != account.currency else ''}",
                 )
+            # 港股通每日额度（纸面）
+            if is_hk_connect(instrument):
+                consume_hk_connect_quota(db, account, notional + fee)
             if pos:
                 old_qty = micros_to_qty(pos.qty_micros)
                 new_qty = old_qty + Decimal(str(qty))
@@ -184,6 +200,19 @@ def place_order(
         else:
             if not pos or pos.qty_micros < qty_micros:
                 raise AppError("INSUFFICIENT_POSITION", "可卖数量不够。")
+            sellable = sellable_qty_micros(db, account_id, instrument, pos.qty_micros)
+            if qty_micros > sellable:
+                locked = float(micros_to_qty(pos.qty_micros - sellable))
+                raise AppError(
+                    "T1_LOCKED",
+                    f"T+1 限制：今日买入的 {locked:g} 股暂不可卖。"
+                    f"当前可卖 {float(micros_to_qty(sellable)):g} / 持仓 {float(micros_to_qty(pos.qty_micros)):g}。",
+                    extra={
+                        "sellable_qty": float(micros_to_qty(sellable)),
+                        "locked_qty": locked,
+                        "position_qty": float(micros_to_qty(pos.qty_micros)),
+                    },
+                )
             proceeds = notional - fee
             if proceeds < 0:
                 raise AppError("PRICE_INVALID", "费用超过成交额，请检查数量。")
@@ -240,6 +269,7 @@ def place_order(
 
         db.commit()
         db.refresh(order)
+        invalidate_positions_cache(account_id)
         try:
             from app.services.equity import take_snapshot
 
@@ -280,47 +310,90 @@ def list_orders(db: Session, account_id: int) -> list[dict]:
     return [_order_receipt(o) for o in rows]
 
 
-def list_positions(db: Session, account_id: int) -> list[dict]:
+def invalidate_positions_cache(account_id: int | None = None) -> None:
+    if account_id is None:
+        cache_delete_prefix("positions:")
+        cache_delete_prefix("summary:")
+        cache_delete_prefix("risk:")
+    else:
+        cache_delete_prefix(f"positions:{account_id}")
+        cache_delete_prefix(f"summary:{account_id}")
+        cache_delete_prefix(f"risk:{account_id}")
+
+
+def list_positions(db: Session, account_id: int, *, use_cache: bool = True) -> list[dict]:
     get_account_or_404(db, account_id)
+    cache_key = f"positions:{account_id}"
+    if use_cache:
+        hit = cache_get(cache_key)
+        if hit is not None:
+            return hit
+
     rows = db.query(Position).filter(Position.account_id == account_id).all()
-    out = []
+    symbols = [p.symbol for p in rows]
+    quote_map: dict[str, dict] = {}
+    if symbols:
+        try:
+            for q in get_quotes(symbols, timeout=5.0):
+                quote_map[q["symbol"]] = q
+        except Exception:
+            quote_map = {}
+
+    out: list[dict] = []
     for p in rows:
         inst = db.query(Instrument).filter(Instrument.symbol == p.symbol).first()
         qty = float(micros_to_qty(p.qty_micros))
         avg = float(e4_to_price(p.avg_cost_e4))
-        price = None
-        stale = True
-        try:
-            q = get_quote(p.symbol, allow_stale=True)
-            price = q.price
-            stale = q.stale
-        except AppError:
-            price = None
-        market_value = None
-        unrealized = None
-        unrealized_pct = None
-        if price is not None:
-            market_value = price * qty
-            unrealized = (price - avg) * qty
-            unrealized_pct = ((price - avg) / avg * 100) if avg else None
+        q = quote_map.get(p.symbol) or {}
+        price = q.get("price")
+        stale = bool(q.get("stale", True)) if price is not None else True
+        day_change_pct = q.get("change_pct")
+        # Always produce MV so overview/positions render even when quotes time out
+        mark = float(price) if price is not None else avg
+        market_value = mark * qty
+        unrealized = (mark - avg) * qty if price is not None else None
+        unrealized_pct = ((mark - avg) / avg * 100) if price is not None and avg else None
+        sellable = qty
+        locked = 0.0
+        t1 = False
+        if inst:
+            t1 = applies_t1(inst)
+            sellable_m = sellable_qty_micros(db, account_id, inst, p.qty_micros)
+            sellable = float(micros_to_qty(sellable_m))
+            locked = max(0.0, qty - sellable)
         out.append(
             {
                 "symbol": p.symbol,
                 "name": inst.name if inst else p.symbol,
                 "qty": qty,
+                "sellable_qty": sellable,
+                "locked_qty": locked,
+                "t1": t1,
                 "avg_cost": avg,
                 "price": price,
                 "stale": stale if price is not None else True,
+                "day_change_pct": day_change_pct,
                 "market_value": market_value,
                 "unrealized_pnl": unrealized,
                 "unrealized_pct": unrealized_pct,
                 "currency": inst.currency if inst else None,
+                "market": inst.market if inst else None,
+                "asset_class": inst.asset_class if inst else None,
+                "instrument_type": inst.instrument_type if inst else None,
             }
         )
+    cache_set(cache_key, out, _POSITIONS_TTL)
     return out
 
 
 def account_summary(db: Session, account_id: int) -> dict:
+    from app.services.equity import take_snapshot
+
+    cache_key = f"summary:{account_id}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return hit
+
     account = get_account_or_404(db, account_id)
     positions = list_positions(db, account_id)
     mv_by: dict[str, int] = {}
@@ -331,6 +404,8 @@ def account_summary(db: Session, account_id: int) -> dict:
     data = account_to_dict(account, db=db, market_value_by_ccy=mv_by)
     net = net_deposit_base_cents(db, account)
     equity_cents = money_to_cents(data["total_equity"])
+    cash_cents = money_to_cents(data["cash_balance"])
+    mv_cents = money_to_cents(data["market_value"] or 0)
     pnl_cents = equity_cents - net
     data["net_deposit"] = float(cents_to_money(net))
     data["total_pnl"] = float(cents_to_money(pnl_cents))
@@ -341,4 +416,22 @@ def account_summary(db: Session, account_id: int) -> dict:
     else:
         data["return_pct"] = None
     data["positions_count"] = len(positions)
+    try:
+        take_snapshot(
+            db,
+            account_id,
+            equity_cents=equity_cents,
+            cash_cents=cash_cents,
+            mv_cents=mv_cents,
+        )
+    except Exception:
+        pass
+    day = period_equity_change(db, account_id, days=1, equity_now_cents=equity_cents)
+    week = period_equity_change(db, account_id, days=7, equity_now_cents=equity_cents)
+    data["day_pnl"] = day["pnl"]
+    data["day_pnl_pct"] = day["pnl_pct"]
+    data["week_pnl"] = week["pnl"]
+    data["week_pnl_pct"] = week["pnl_pct"]
+    data["hk_connect"] = hk_connect_status(db, account)
+    cache_set(cache_key, data, _SUMMARY_TTL)
     return data

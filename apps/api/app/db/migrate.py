@@ -60,3 +60,9 @@ def run_migrations(engine: Engine) -> None:
             # fix null currency on flows/ledger
             conn.execute(text("UPDATE cash_flows SET currency = :c WHERE currency IS NULL OR currency = ''"), {"c": cur})
             conn.execute(text("UPDATE cash_ledger SET currency = :c WHERE currency IS NULL OR currency = ''"), {"c": cur})
+
+        # accounts.settings_json
+        if "accounts" in Base.metadata.tables:
+            cols = _cols(conn, "accounts")
+            if "settings_json" not in cols:
+                conn.execute(text("ALTER TABLE accounts ADD COLUMN settings_json TEXT"))

@@ -215,10 +215,13 @@ export function Trade() {
 
             <p className="muted">
               可用 {tradeCcy} {availableCash != null ? money(availableCash, tradeCcy) : '—'}
-              {' '}
-              · 可卖{' '}
-              {pos?.qty ?? 0}
+              {' · '}
+              可卖 {pos?.sellable_qty ?? pos?.qty ?? 0}
+              {pos?.t1 && (pos.locked_qty || 0) > 0
+                ? `（持仓 ${pos.qty}，T+1 锁定 ${pos.locked_qty}）`
+                : ''}
             </p>
+            {market === 'hk' && accountId != null && <HkConnectHint accountId={accountId} />}
 
             <button
               className={side === 'buy' ? 'btn-buy primary' : 'btn-sell primary'}
@@ -353,5 +356,21 @@ export function Trade() {
         </section>
       )}
     </>
+  )
+}
+
+function HkConnectHint({ accountId }: { accountId: number }) {
+  const { data } = useQuery({
+    queryKey: ['account-settings', accountId],
+    queryFn: () => api.accountSettings(accountId),
+  })
+  const hk = data?.hk_connect
+  if (!hk) return null
+  return (
+    <p className="muted" style={{ margin: 0 }}>
+      港股通今日额度剩余 ¥{Math.round(hk.remaining_cny).toLocaleString()} / ¥
+      {Math.round(hk.quota_cny).toLocaleString()}
+      {hk.exhausted ? ' · 已用尽' : ''}
+    </p>
   )
 }

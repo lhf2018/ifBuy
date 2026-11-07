@@ -9,11 +9,23 @@ from sqlalchemy.orm import Session
 from app.core.money import cents_to_money, money_to_cents
 from app.models import EquitySnapshot
 from app.services.accounts import account_to_dict, convert_to_base_cents, get_account_or_404, net_deposit_base_cents
+from app.services.rules import get_account_settings, hk_connect_status
 from app.services.trading import list_positions
 
 
 def risk_report(db: Session, account_id: int) -> dict:
+    from app.core.cache import cache_get, cache_set
+
+    cache_key = f"risk:{account_id}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return hit
+
     account = get_account_or_404(db, account_id)
+    settings = get_account_settings(account)
+    max_w = float(settings["alert_max_weight_pct"])
+    loss_th = float(settings["alert_loss_pct"])
+    low_cash = float(settings["alert_low_cash_pct"])
     positions = list_positions(db, account_id)
     base = account.currency.upper()
 
@@ -99,15 +111,17 @@ def risk_report(db: Session, account_id: int) -> dict:
     return_pct = float((Decimal(pnl) / Decimal(net) * 100).quantize(Decimal("0.01"))) if net > 0 else None
 
     alerts: list[dict] = []
-    if top_weight >= 40:
+    warn_w = max_w
+    info_w = max(10.0, max_w * 0.6)
+    if top_weight >= warn_w:
         alerts.append(
             {
                 "level": "warn",
                 "code": "CONCENTRATION",
-                "message": f"单票集中度偏高：{top['name']} 约占权益 {top_weight}%",
+                "message": f"单票集中度偏高：{top['name']} 约占权益 {top_weight}%（阈值 {warn_w:g}%）",
             }
         )
-    elif top_weight >= 25:
+    elif top_weight >= info_w:
         alerts.append(
             {
                 "level": "info",
@@ -115,8 +129,14 @@ def risk_report(db: Session, account_id: int) -> dict:
                 "message": f"最大持仓 {top['name']} 约占 {top_weight}%",
             }
         )
-    if cash_ratio < 5 and equity > 0:
-        alerts.append({"level": "warn", "code": "LOW_CASH", "message": f"现金比例偏低（{cash_ratio}%），缓冲不足"})
+    if cash_ratio < low_cash and equity > 0:
+        alerts.append(
+            {
+                "level": "warn",
+                "code": "LOW_CASH",
+                "message": f"现金比例偏低（{cash_ratio}%，阈值 {low_cash:g}%），缓冲不足",
+            }
+        )
     if cash_ratio > 80 and total_mv_base > 0:
         alerts.append({"level": "info", "code": "HIGH_CASH", "message": f"现金比例较高（{cash_ratio}%），仓位偏轻"})
     if max_dd >= 20:
@@ -135,20 +155,54 @@ def risk_report(db: Session, account_id: int) -> dict:
                 "message": f"历史最大回撤约 {max_dd:.1f}%",
             }
         )
-    losers = [p for p in positions if (p.get("unrealized_pct") or 0) <= -15]
+    losers = [p for p in positions if (p.get("unrealized_pct") or 0) <= -loss_th]
     if losers:
         names = "、".join(p["name"] for p in losers[:3])
         alerts.append(
             {
                 "level": "warn",
                 "code": "UNDERWATER",
-                "message": f"浮亏超过 15%：{names}" + ("…" if len(losers) > 3 else ""),
+                "message": f"浮亏超过 {loss_th:g}%：{names}" + ("…" if len(losers) > 3 else ""),
+            }
+        )
+    t1_locked = [p for p in positions if (p.get("locked_qty") or 0) > 0]
+    if t1_locked:
+        alerts.append(
+            {
+                "level": "info",
+                "code": "T1_LOCKED",
+                "message": f"T+1 锁定中：{len(t1_locked)} 只标的有今日买入不可卖份额",
+            }
+        )
+    hk = hk_connect_status(db, account)
+    if hk["quota_cny"] > 0 and hk["remaining_cny"] / hk["quota_cny"] < 0.1:
+        alerts.append(
+            {
+                "level": "warn" if hk["exhausted"] else "info",
+                "code": "HK_CONNECT",
+                "message": f"港股通今日额度剩余 ¥{hk['remaining_cny']:.0f} / ¥{hk['quota_cny']:.0f}",
             }
         )
     if not alerts:
         alerts.append({"level": "ok", "code": "OK", "message": "暂无特别风险提示"})
 
-    return {
+    flagged = []
+    for p in positions:
+        flags = []
+        if equity > 0 and p.get("market_value") is not None and p.get("currency"):
+            # weight approx in instrument ccy skipped — use holdings list
+            pass
+        if (p.get("unrealized_pct") or 0) <= -loss_th:
+            flags.append("loss")
+        if (p.get("locked_qty") or 0) > 0:
+            flags.append("t1")
+        for h in mv_by_symbol:
+            if h["symbol"] == p["symbol"] and (h.get("weight_pct") or 0) >= warn_w:
+                flags.append("concentration")
+        if flags:
+            flagged.append({"symbol": p["symbol"], "name": p["name"], "flags": flags})
+
+    result = {
         "account_id": account_id,
         "base_currency": base,
         "total_equity": equity,
@@ -161,4 +215,9 @@ def risk_report(db: Session, account_id: int) -> dict:
         "top_holding": top,
         "holdings": mv_by_symbol,
         "alerts": alerts,
+        "settings": settings,
+        "hk_connect": hk,
+        "flagged_positions": flagged,
     }
+    cache_set(cache_key, result, 45.0)
+    return result

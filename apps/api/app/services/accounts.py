@@ -187,6 +187,12 @@ def add_cash_flow(
     db.commit()
     db.refresh(account)
     try:
+        from app.services.trading import invalidate_positions_cache
+
+        invalidate_positions_cache(account.id)
+    except Exception:
+        pass
+    try:
         from app.services.equity import take_snapshot
 
         take_snapshot(db, account.id)
@@ -254,6 +260,12 @@ def exchange(
     db.commit()
     db.refresh(fx)
     db.refresh(account)
+    try:
+        from app.services.trading import invalidate_positions_cache
+
+        invalidate_positions_cache(account.id)
+    except Exception:
+        pass
     try:
         from app.services.equity import take_snapshot
 

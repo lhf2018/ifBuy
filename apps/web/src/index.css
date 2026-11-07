@@ -714,6 +714,47 @@ label {
 .alloc-fill.crypto { background: var(--crypto); }
 .alloc-fill.custom { background: #8b919a; }
 
+.period-pnl-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 6px;
+}
+
+.period-pnl {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--bg);
+  box-shadow: var(--neu-in-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.period-pnl-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+
+.period-pnl strong {
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.pill.warn-pill {
+  color: var(--warn);
+}
+
+@media (max-width: 900px) {
+  .period-pnl-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .quote-symbol {
   color: var(--text-faint);
   font-family: var(--font-num);

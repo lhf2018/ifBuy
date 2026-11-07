@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.schemas.common import (
     AccountCreate,
+    AccountSettingsUpdate,
     AccountUpdate,
     CashFlowCreate,
     CustomAssetCreate,
@@ -25,6 +26,7 @@ from app.services.fx import get_fx_rate
 from app.services import fees as fee_svc
 from app.services.equity import list_equity_curve, rebuild_equity_curve
 from app.services.export_import import export_all, import_payload
+from app.services.rules import get_account_settings, hk_connect_status, save_account_settings
 from app.models import WatchlistItem
 from app.core.errors import AppError
 
@@ -144,6 +146,27 @@ def api_list_positions(account_id: int, db: Session = Depends(get_db)):
 @router.get("/accounts/{account_id}/risk")
 def api_risk(account_id: int, db: Session = Depends(get_db)):
     return risk_svc.risk_report(db, account_id)
+
+
+@router.get("/accounts/{account_id}/settings")
+def api_get_settings(account_id: int, db: Session = Depends(get_db)):
+    account = account_svc.get_account_or_404(db, account_id)
+    return {
+        "account_id": account_id,
+        "settings": get_account_settings(account),
+        "hk_connect": hk_connect_status(db, account),
+    }
+
+
+@router.patch("/accounts/{account_id}/settings")
+def api_patch_settings(account_id: int, body: AccountSettingsUpdate, db: Session = Depends(get_db)):
+    account = account_svc.get_account_or_404(db, account_id)
+    settings = save_account_settings(db, account, body.model_dump(exclude_unset=True))
+    return {
+        "account_id": account_id,
+        "settings": settings,
+        "hk_connect": hk_connect_status(db, account),
+    }
 
 
 @router.get("/accounts/{account_id}/corporate-actions")

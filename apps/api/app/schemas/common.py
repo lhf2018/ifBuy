@@ -97,3 +97,10 @@ class CustomAssetCreate(BaseModel):
 class CustomPriceUpdate(BaseModel):
     price: float = Field(gt=0)
     note: str | None = None
+
+
+class AccountSettingsUpdate(BaseModel):
+    alert_max_weight_pct: float | None = Field(default=None, ge=5, le=100)
+    alert_loss_pct: float | None = Field(default=None, ge=1, le=90)
+    alert_low_cash_pct: float | None = Field(default=None, ge=0, le=50)
+    hk_connect_daily_quota_cny: float | None = Field(default=None, ge=0)

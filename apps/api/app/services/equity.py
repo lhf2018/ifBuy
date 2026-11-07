@@ -28,10 +28,19 @@ def _live_equity_parts(db: Session, account_id: int) -> tuple[int, int, int]:
     )
 
 
-def take_snapshot(db: Session, account_id: int, *, snapshot_date: str | None = None) -> EquitySnapshot:
+def take_snapshot(
+    db: Session,
+    account_id: int,
+    *,
+    snapshot_date: str | None = None,
+    equity_cents: int | None = None,
+    cash_cents: int | None = None,
+    mv_cents: int | None = None,
+) -> EquitySnapshot:
     get_account_or_404(db, account_id)
     day = snapshot_date or datetime.now(timezone.utc).date().isoformat()
-    equity_cents, cash_cents, mv_cents = _live_equity_parts(db, account_id)
+    if equity_cents is None or cash_cents is None or mv_cents is None:
+        equity_cents, cash_cents, mv_cents = _live_equity_parts(db, account_id)
     row = (
         db.query(EquitySnapshot)
         .filter(EquitySnapshot.account_id == account_id, EquitySnapshot.snapshot_date == day)

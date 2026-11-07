@@ -94,6 +94,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  accountSettings: (id: number) =>
+    request<{ account_id: number; settings: AccountSettings; hk_connect: HkConnectStatus }>(
+      `/accounts/${id}/settings`,
+    ),
+  updateAccountSettings: (id: number, body: Partial<AccountSettings>) =>
+    request<{ account_id: number; settings: AccountSettings; hk_connect: HkConnectStatus }>(
+      `/accounts/${id}/settings`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+    ),
 }
 
 export type RiskAlert = { level: string; code: string; message: string }
@@ -122,6 +131,9 @@ export type RiskReport = {
     unrealized_pct: number | null
   }>
   alerts: RiskAlert[]
+  settings?: AccountSettings
+  hk_connect?: HkConnectStatus
+  flagged_positions?: Array<{ symbol: string; name: string; flags: string[] }>
 }
 
 export type CorpAction = {
@@ -150,6 +162,21 @@ export type Account = {
   status: string
 }
 
+export type HkConnectStatus = {
+  trade_date: string
+  quota_cny: number
+  used_cny: number
+  remaining_cny: number
+  exhausted: boolean
+}
+
+export type AccountSettings = {
+  alert_max_weight_pct: number
+  alert_loss_pct: number
+  alert_low_cash_pct: number
+  hk_connect_daily_quota_cny: number
+}
+
 export type AccountSummary = Account & {
   market_value: number | null
   market_value_by_currency?: Wallets | null
@@ -158,6 +185,11 @@ export type AccountSummary = Account & {
   total_pnl?: number | null
   return_pct: number | null
   positions_count: number
+  day_pnl?: number | null
+  day_pnl_pct?: number | null
+  week_pnl?: number | null
+  week_pnl_pct?: number | null
+  hk_connect?: HkConnectStatus
 }
 
 export type EquityPoint = {
@@ -244,13 +276,20 @@ export type Position = {
   symbol: string
   name: string
   qty: number
+  sellable_qty?: number
+  locked_qty?: number
+  t1?: boolean
   avg_cost: number
   price: number | null
   stale: boolean
+  day_change_pct?: number | null
   market_value: number | null
   unrealized_pnl: number | null
   unrealized_pct: number | null
   currency?: string | null
+  market?: string | null
+  asset_class?: string | null
+  instrument_type?: string | null
 }
 
 export type OrderRow = {
