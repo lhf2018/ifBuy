@@ -24,14 +24,20 @@ def get_fx_rate(from_ccy: str, to_ccy: str) -> tuple[float, str]:
     if cached and now - cached[0] < 300:
         return cached[1], "cache"
 
-    # Prefer USD/CNY then invert
     try:
-        fut = _executor.submit(_fetch_usd_cny)
-        usd_cny = fut.result(timeout=8)  # CNY per 1 USD
-        if from_ccy == "USD" and to_ccy == "CNY":
-            rate = usd_cny
-        elif from_ccy == "CNY" and to_ccy == "USD":
-            rate = 1.0 / usd_cny
+        if {from_ccy, to_ccy} <= {"USD", "CNY"}:
+            fut = _executor.submit(_fetch_pair, "USDCNY=X")
+            usd_cny = fut.result(timeout=8)  # CNY per 1 USD
+            rate = usd_cny if (from_ccy == "USD" and to_ccy == "CNY") else 1.0 / usd_cny
+        elif {from_ccy, to_ccy} <= {"HKD", "CNY"}:
+            fut = _executor.submit(_fetch_pair, "HKDCNY=X")
+            hkd_cny = fut.result(timeout=8)  # CNY per 1 HKD
+            rate = hkd_cny if (from_ccy == "HKD" and to_ccy == "CNY") else 1.0 / hkd_cny
+        elif {from_ccy, to_ccy} <= {"HKD", "USD"}:
+            # via CNY bridge
+            r1, _ = get_fx_rate(from_ccy, "CNY")
+            r2, _ = get_fx_rate("CNY", to_ccy)
+            rate = r1 * r2
         else:
             raise AppError("FX_UNSUPPORTED", f"暂不支持 {from_ccy}→{to_ccy} 换汇")
         _cache[key] = (now, rate)
@@ -39,18 +45,23 @@ def get_fx_rate(from_ccy: str, to_ccy: str) -> tuple[float, str]:
     except AppError:
         raise
     except Exception:
-        # fallback approximate
-        if from_ccy == "USD" and to_ccy == "CNY":
-            return 7.2, "fallback"
-        if from_ccy == "CNY" and to_ccy == "USD":
-            return 1 / 7.2, "fallback"
+        fb = {
+            ("USD", "CNY"): 7.2,
+            ("CNY", "USD"): 1 / 7.2,
+            ("HKD", "CNY"): 0.92,
+            ("CNY", "HKD"): 1 / 0.92,
+            ("HKD", "USD"): 0.128,
+            ("USD", "HKD"): 1 / 0.128,
+        }
+        if (from_ccy, to_ccy) in fb:
+            return fb[(from_ccy, to_ccy)], "fallback"
         raise AppError("FX_UNAVAILABLE", "暂时拿不到汇率，请手填汇率后再换。")
 
 
-def _fetch_usd_cny() -> float:
+def _fetch_pair(ticker: str) -> float:
     import yfinance as yf
 
-    t = yf.Ticker("USDCNY=X")
+    t = yf.Ticker(ticker)
     info = t.fast_info
     price = float(getattr(info, "last_price", None) or getattr(info, "lastPrice", None) or 0)
     if not price:

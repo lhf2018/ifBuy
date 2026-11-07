@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, type ApiError, type TradeMarker } from '../api'
 import { useAccount } from '../account'
 import { KlineChart } from '../components/KlineChart'
-import { classifyMarket } from '../lib/markets'
+import { classifyMarket, marketLabel } from '../lib/markets'
 import { money, pct, pnlClass, price as fmtPrice } from '../lib/format'
 
 export function Trade() {
@@ -20,6 +20,11 @@ export function Trade() {
   const [note, setNote] = useState('')
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [divPerShare, setDivPerShare] = useState(0.1)
+  const [splitNum, setSplitNum] = useState(2)
+  const [splitDen, setSplitDen] = useState(1)
+  const [manualVal, setManualVal] = useState<number | ''>('')
+  const [corpMsg, setCorpMsg] = useState<string | null>(null)
 
   const { data: instrument } = useQuery({
     queryKey: ['instrument', symbol],
@@ -60,8 +65,10 @@ export function Trade() {
         })),
     [orders, symbol],
   )
-  const market = instrument ? classifyMarket(instrument) : classifyMarket({ symbol })
-  const marketLabel = market === 'cn' ? 'A股' : market === 'us' ? '美股' : '黄金'
+  const market = instrument
+    ? classifyMarket(instrument)
+    : classifyMarket({ symbol, instrument_type: symbol.endsWith('.OF') ? 'fund' : undefined })
+  const mLabel = marketLabel(market)
 
   useEffect(() => {
     if (synced && quote?.price != null) setPrice(quote.price)
@@ -133,9 +140,9 @@ export function Trade() {
         <div className="row between">
           <div>
             <div className="row" style={{ marginBottom: 8 }}>
-              <span className={`pill ${market}`}>{marketLabel}</span>
+              <span className={`pill ${market}`}>{mLabel}</span>
               <Link className="muted" to={`/markets?tab=${market}`}>
-                ← 返回{marketLabel}
+                ← 返回{mLabel}
               </Link>
             </div>
             <h1>
@@ -180,9 +187,11 @@ export function Trade() {
 
           <div className="form-stack">
             <label>
-              价格 {synced ? '· 跟随最新价' : '· 手填'}
+              {market === 'fund' ? '净值' : '价格'}{' '}
+              {synced ? (market === 'fund' ? '· 跟随最新净值' : '· 跟随最新价') : '· 手填'}
               <input
                 type="number"
+                step={market === 'fund' ? '0.0001' : '0.01'}
                 value={price}
                 onChange={(e) => {
                   setSynced(false)
@@ -192,11 +201,11 @@ export function Trade() {
             </label>
             {!synced && (
               <button className="ghost" onClick={() => setSynced(true)}>
-                恢复最新价
+                {market === 'fund' ? '恢复最新净值' : '恢复最新价'}
               </button>
             )}
             <label>
-              数量
+              {market === 'fund' ? '份额' : '数量'}
               <input type="number" value={qty} onChange={(e) => setQty(Number(e.target.value))} />
             </label>
             <label>
@@ -238,6 +247,108 @@ export function Trade() {
               现在赚了 {pos.unrealized_pnl?.toFixed(2) ?? '—'}
               {pos.unrealized_pct != null ? ` (${pct(pos.unrealized_pct)})` : ''}
             </div>
+          </div>
+        </section>
+      )}
+
+      {pos && accountId && market !== 'custom' && (
+        <section className="surface mt">
+          <h2 className="section-title">分红 / 拆股</h2>
+          <div className="form-grid form-grid-2">
+            <label>
+              每股分红（现金）
+              <input
+                type="number"
+                step="0.0001"
+                value={divPerShare}
+                onChange={(e) => setDivPerShare(Number(e.target.value))}
+              />
+            </label>
+            <div className="form-actions" style={{ marginTop: 0, alignItems: 'end' }}>
+              <button
+                className="btn-primary"
+                disabled={!accountId}
+                onClick={async () => {
+                  try {
+                    const r = await api.dividend(accountId, {
+                      symbol,
+                      cash_per_share: divPerShare,
+                    })
+                    setCorpMsg(r.note || '分红已入账')
+                    refreshAccounts()
+                    qc.invalidateQueries({ queryKey: ['summary', accountId] })
+                    qc.invalidateQueries({ queryKey: ['positions', accountId] })
+                  } catch (e) {
+                    setCorpMsg((e as Error).message)
+                  }
+                }}
+              >
+                登记分红
+              </button>
+            </div>
+            <label>
+              拆股（新:旧）
+              <div className="row">
+                <input type="number" value={splitNum} onChange={(e) => setSplitNum(Number(e.target.value))} />
+                <span>:</span>
+                <input type="number" value={splitDen} onChange={(e) => setSplitDen(Number(e.target.value))} />
+              </div>
+            </label>
+            <div className="form-actions" style={{ marginTop: 0, alignItems: 'end' }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const r = await api.split(accountId, {
+                      symbol,
+                      ratio_num: splitNum,
+                      ratio_den: splitDen,
+                    })
+                    setCorpMsg(r.note || '拆股已调整')
+                    qc.invalidateQueries({ queryKey: ['positions', accountId] })
+                    qc.invalidateQueries({ queryKey: ['summary', accountId] })
+                  } catch (e) {
+                    setCorpMsg((e as Error).message)
+                  }
+                }}
+              >
+                登记拆股
+              </button>
+            </div>
+          </div>
+          {corpMsg && <p className="muted mt">{corpMsg}</p>}
+        </section>
+      )}
+
+      {market === 'custom' && accountId && (
+        <section className="surface mt">
+          <h2 className="section-title">更新估值</h2>
+          <div className="form-stack">
+            <label>
+              当前估值 / 单价
+              <input
+                type="number"
+                value={manualVal === '' ? quote?.price ?? '' : manualVal}
+                onChange={(e) => setManualVal(e.target.value === '' ? '' : Number(e.target.value))}
+              />
+            </label>
+            <button
+              className="btn-primary"
+              onClick={async () => {
+                const px = typeof manualVal === 'number' ? manualVal : Number(quote?.price)
+                try {
+                  await api.setCustomPrice(symbol, { price: px })
+                  setCorpMsg(`估值已更新为 ${px}`)
+                  qc.invalidateQueries({ queryKey: ['quote', symbol] })
+                  qc.invalidateQueries({ queryKey: ['positions', accountId] })
+                  qc.invalidateQueries({ queryKey: ['summary', accountId] })
+                } catch (e) {
+                  setCorpMsg((e as Error).message)
+                }
+              }}
+            >
+              保存估值
+            </button>
+            {corpMsg && <p className="muted">{corpMsg}</p>}
           </div>
         </section>
       )}

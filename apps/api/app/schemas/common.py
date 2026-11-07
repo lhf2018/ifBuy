@@ -37,13 +37,13 @@ class AccountUpdate(BaseModel):
 class CashFlowCreate(BaseModel):
     type: str = Field(pattern="^(deposit|withdraw)$")
     amount: float = Field(gt=0)
-    currency: str | None = Field(default=None, pattern="^(CNY|USD)$")
+    currency: str | None = Field(default=None, pattern="^(CNY|USD|HKD)$")
     note: str | None = None
 
 
 class FxExchangeCreate(BaseModel):
-    from_currency: str = Field(pattern="^(CNY|USD)$")
-    to_currency: str = Field(pattern="^(CNY|USD)$")
+    from_currency: str = Field(pattern="^(CNY|USD|HKD)$")
+    to_currency: str = Field(pattern="^(CNY|USD|HKD)$")
     from_amount: float = Field(gt=0)
     rate: float | None = Field(default=None, gt=0)
     note: str | None = None
@@ -71,3 +71,29 @@ class NoteCreate(BaseModel):
     kind: str = "review"
     order_id: int | None = None
     symbol: str | None = None
+
+
+class DividendCreate(BaseModel):
+    symbol: str
+    cash_per_share: float = Field(gt=0)
+    note: str | None = None
+
+
+class SplitCreate(BaseModel):
+    symbol: str
+    ratio_num: float = Field(gt=0)
+    ratio_den: float = Field(default=1, gt=0)
+    note: str | None = None
+
+
+class CustomAssetCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=24)
+    name: str = Field(min_length=1, max_length=64)
+    currency: str = Field(default="CNY", pattern="^(CNY|USD|HKD)$")
+    price: float = Field(gt=0)
+    note: str | None = None
+
+
+class CustomPriceUpdate(BaseModel):
+    price: float = Field(gt=0)
+    note: str | None = None

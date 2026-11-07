@@ -9,7 +9,7 @@ from app.core.money import cents_to_money, money_to_cents
 from app.models import Account, CashFlow, CashLedger, FxTrade, User, WalletBalance
 from app.services.fx import convert_cents, get_fx_rate
 
-SUPPORTED = ("CNY", "USD")
+SUPPORTED = ("CNY", "USD", "HKD")
 
 
 def ensure_default_user(db: Session) -> User:
@@ -105,7 +105,7 @@ def create_account(
 ) -> Account:
     ensure_default_user(db)
     base = (currency or base_currency or "CNY").upper()
-    if base not in SUPPORTED:
+    if base not in ("CNY", "USD"):
         raise AppError("FX_UNSUPPORTED", "基准货币仅支持 CNY / USD")
 
     cny = money_to_cents(initial_cash_cny)
@@ -211,7 +211,7 @@ def exchange(
     if frm == to:
         raise AppError("FX_UNSUPPORTED", "换汇币种不能相同")
     if frm not in SUPPORTED or to not in SUPPORTED:
-        raise AppError("FX_UNSUPPORTED", "目前只支持 CNY ↔ USD")
+        raise AppError("FX_UNSUPPORTED", "目前支持 CNY / USD / HKD 之间换汇")
 
     from_cents = money_to_cents(from_amount)
     if from_cents <= 0:

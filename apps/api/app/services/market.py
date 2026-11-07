@@ -11,10 +11,19 @@ from app.core.errors import AppError
 from app.core.money import price_to_e4
 from app.models import Bar, Instrument
 from app.providers.akshare_cn import AkshareCNProvider, get_cached_name
+from app.providers.akshare_fund import AkshareFundProvider, FUND_PRESETS, fund_presets
+from app.providers.akshare_hk import AkshareHKProvider, hk_presets
+from app.providers.akshare_fut import AkshareFutProvider, fut_presets
+from app.providers.crypto import CryptoProvider, crypto_presets
 from app.providers.base import BarDTO, InstrumentDraft, QuoteDTO
 from app.providers.yahoo_us import YahooUSProvider, GOLD_PRESETS
 
 _CN_RE = re.compile(r"^\d{6}\.(SH|SZ|BJ)$", re.I)
+_FUND_RE = re.compile(r"^\d{6}\.OF$", re.I)
+_HK_RE = re.compile(r"^\d{1,5}\.HK$", re.I)
+_FUT_RE = re.compile(r"^[A-Z]{1,3}0\.FUT$", re.I)
+_CRYPTO_RE = re.compile(r"^[A-Z0-9]{2,10}-USD$", re.I)
+_CUST_RE = re.compile(r"^CUST\.[A-Z0-9_-]{1,24}$", re.I)
 _US_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,10}$")
 
 _quote_cache: dict[str, tuple[float, QuoteDTO]] = {}
@@ -23,16 +32,38 @@ _executor = ThreadPoolExecutor(max_workers=4)
 
 cn_provider = AkshareCNProvider()
 us_provider = YahooUSProvider()
+fund_provider = AkshareFundProvider()
+hk_provider = AkshareHKProvider()
+fut_provider = AkshareFutProvider()
+crypto_provider = CryptoProvider()
 
 
 def validate_symbol(symbol: str) -> str:
     s = symbol.strip().upper()
-    if _CN_RE.match(s) or _US_RE.match(s):
+    if (
+        _CN_RE.match(s)
+        or _FUND_RE.match(s)
+        or _HK_RE.match(s)
+        or _FUT_RE.match(s)
+        or _CRYPTO_RE.match(s)
+        or _CUST_RE.match(s)
+        or _US_RE.match(s)
+    ):
         return s
     raise AppError("INSTRUMENT_NOT_FOUND", f"不支持的代码格式：{symbol}")
 
 
 def _provider_for(symbol: str):
+    if _CUST_RE.match(symbol):
+        return None  # manual
+    if _FUND_RE.match(symbol):
+        return fund_provider
+    if _HK_RE.match(symbol):
+        return hk_provider
+    if _FUT_RE.match(symbol):
+        return fut_provider
+    if _CRYPTO_RE.match(symbol):
+        return crypto_provider
     if _CN_RE.match(symbol):
         return cn_provider
     return us_provider
@@ -69,9 +100,14 @@ def _upsert_instrument(db: Session, draft: InstrumentDraft) -> Instrument:
 
 def search_instruments(db: Session, q: str, asset_class: str | None = None, theme: str | None = None) -> list[dict]:
     q = q.strip()
+    drafts: list[InstrumentDraft] = []
+    want_fund = asset_class == "fund_cn"
+    want_hk = asset_class == "equity_hk"
+    want_fut = asset_class == "commodity"
+    want_crypto = asset_class == "crypto"
+    want_custom = asset_class == "custom"
+
     if not q:
-        # presets for gold
-        drafts: list[InstrumentDraft] = []
         if theme == "gold" or asset_class == "gold":
             drafts.extend(
                 [
@@ -101,19 +137,52 @@ def search_instruments(db: Session, q: str, asset_class: str | None = None, them
                     ),
                 ]
             )
+        elif want_fund:
+            drafts.extend(fund_presets())
+        elif want_hk:
+            drafts.extend(hk_presets())
+        elif want_fut:
+            drafts.extend(fut_presets())
+        elif want_crypto:
+            drafts.extend(crypto_presets())
+        elif want_custom:
+            rows = db.query(Instrument).filter(Instrument.asset_class == "custom").limit(50).all()
+            return [_instrument_dict(r) for r in rows]
         else:
             return []
+    elif want_custom:
+        rows = (
+            db.query(Instrument)
+            .filter(Instrument.asset_class == "custom", Instrument.name.contains(q) | Instrument.symbol.contains(q.upper()))
+            .limit(50)
+            .all()
+        )
+        return [_instrument_dict(r) for r in rows]
+    elif want_fund or q.upper().endswith(".OF") or (re.fullmatch(r"\d{6}", q) and q in FUND_PRESETS):
+        code = q.upper().removesuffix(".OF")
+        drafts.extend(_run(fund_provider.search, code if re.fullmatch(r"\d{6}", code) else q))
+    elif want_hk or q.upper().endswith(".HK"):
+        drafts.extend(_run(hk_provider.search, q))
+    elif want_fut or q.upper().endswith(".FUT"):
+        drafts.extend(_run(fut_provider.search, q))
+    elif want_crypto or _CRYPTO_RE.match(q.upper()) or q.upper().endswith("-USD"):
+        drafts.extend(_run(crypto_provider.search, q))
     else:
-        drafts = []
-        # route by keyword shape
-        if re.fullmatch(r"\d{6}", q) or re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", q, re.I) or any("\u4e00" <= c <= "\u9fff" for c in q):
+        has_cjk = any("\u4e00" <= c <= "\u9fff" for c in q)
+        if re.fullmatch(r"\d{6}", q) or re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", q, re.I) or has_cjk:
             drafts.extend(_run(cn_provider.search, q))
+            if has_cjk:
+                drafts.extend(_run(fund_provider.search, q))
+                drafts.extend(_run(hk_provider.search, q))
+        if re.fullmatch(r"\d{1,5}", q) or q.upper().endswith(".HK"):
+            drafts.extend(_run(hk_provider.search, q))
         if _US_RE.match(q.upper()) or q.upper() in GOLD_PRESETS or "gold" in q.lower():
             drafts.extend(_run(us_provider.search, q))
         if not drafts:
-            # try both
             drafts.extend(_run(cn_provider.search, q))
             drafts.extend(_run(us_provider.search, q))
+            drafts.extend(_run(fund_provider.search, q))
+            drafts.extend(_run(hk_provider.search, q))
 
     results = []
     for d in drafts:
@@ -149,7 +218,40 @@ def get_instrument(db: Session, symbol: str) -> dict:
                     break
     if not inst:
         # synthesize from symbol rules
-        if _CN_RE.match(symbol):
+        if _FUND_RE.match(symbol):
+            code = symbol.split(".")[0]
+            found = _run(fund_provider.search, code)
+            draft = found[0] if found else InstrumentDraft(
+                symbol=symbol,
+                ticker=code,
+                name=FUND_PRESETS.get(code, code),
+                instrument_type="fund",
+                asset_class="fund_cn",
+                market="CN",
+                currency="CNY",
+                lot_size=1,
+                tick_size=0.0001,
+                provider="akshare_fund",
+            )
+            inst = _upsert_instrument(db, draft)
+        elif _HK_RE.match(symbol):
+            found = _run(hk_provider.search, symbol)
+            if not found:
+                raise AppError("INSTRUMENT_NOT_FOUND", f"找不到港股 {symbol}", status_code=404)
+            inst = _upsert_instrument(db, found[0])
+        elif _FUT_RE.match(symbol):
+            found = _run(fut_provider.search, symbol)
+            if not found:
+                raise AppError("INSTRUMENT_NOT_FOUND", f"找不到期货 {symbol}", status_code=404)
+            inst = _upsert_instrument(db, found[0])
+        elif _CRYPTO_RE.match(symbol):
+            found = _run(crypto_provider.search, symbol)
+            if not found:
+                raise AppError("INSTRUMENT_NOT_FOUND", f"找不到加密货币 {symbol}", status_code=404)
+            inst = _upsert_instrument(db, found[0])
+        elif _CUST_RE.match(symbol):
+            raise AppError("INSTRUMENT_NOT_FOUND", "请先在行情「自定义」里创建该资产", status_code=404)
+        elif _CN_RE.match(symbol):
             code = symbol.split(".")[0]
             name = get_cached_name(symbol) or code
             itype = "etf" if code.startswith(("15", "16", "51", "56", "58")) else "equity"
@@ -239,6 +341,37 @@ def _quote_from_last_bar(symbol: str) -> QuoteDTO | None:
         db.close()
 
 
+def _quote_from_custom(symbol: str) -> QuoteDTO | None:
+    import json
+
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        inst = db.query(Instrument).filter(Instrument.symbol == symbol).first()
+        if not inst or not inst.meta_json:
+            return None
+        meta = json.loads(inst.meta_json)
+        price = float(meta.get("manual_price") or 0)
+        if price <= 0:
+            return None
+        return QuoteDTO(
+            symbol=symbol,
+            price=price,
+            change=None,
+            change_pct=None,
+            prev_close=None,
+            as_of=datetime.now(timezone.utc),
+            session="closed",
+            stale=True,
+            provider="manual",
+        )
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
 def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
     symbol = validate_symbol(symbol)
     now = time.time()
@@ -247,6 +380,12 @@ def get_quote(symbol: str, allow_stale: bool = True) -> QuoteDTO:
         q = cached[1]
         q.stale = False
         return q
+    if _CUST_RE.match(symbol):
+        q = _quote_from_custom(symbol)
+        if q:
+            _quote_cache[symbol] = (now, q)
+            return q
+        raise AppError("QUOTE_UNAVAILABLE", "自定义资产暂无估值，请先更新估值")
     provider = _provider_for(symbol)
     try:
         fut = _executor.submit(provider.get_quote, symbol)
@@ -317,14 +456,34 @@ def get_bars(db: Session, symbol: str, interval: str, adjust: str, limit: int) -
             need_fetch = False
 
     if need_fetch:
-        provider = _provider_for(symbol)
-        try:
-            fut = _executor.submit(provider.get_bars, symbol, interval, adjust, limit)
-            bars: list[BarDTO] = fut.result(timeout=15)
-        except Exception as e:
-            if cached:
-                return [_bar_dict(b) for b in cached[-limit:]]
-            raise AppError("QUOTE_UNAVAILABLE", f"K 线暂时拉不到：{e}")
+        if _CUST_RE.match(symbol):
+            # flat synthetic bar from manual price
+            q = _quote_from_custom(symbol)
+            if not q:
+                if cached:
+                    return [_bar_dict(b) for b in cached[-limit:]]
+                raise AppError("QUOTE_UNAVAILABLE", "自定义资产暂无估值")
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            bars = [
+                BarDTO(
+                    ts=day,
+                    open=q.price,
+                    high=q.price,
+                    low=q.price,
+                    close=q.price,
+                    volume=0,
+                    finalized=False,
+                )
+            ]
+        else:
+            provider = _provider_for(symbol)
+            try:
+                fut = _executor.submit(provider.get_bars, symbol, interval, adjust, limit)
+                bars: list[BarDTO] = fut.result(timeout=15)
+            except Exception as e:
+                if cached:
+                    return [_bar_dict(b) for b in cached[-limit:]]
+                raise AppError("QUOTE_UNAVAILABLE", f"K 线暂时拉不到：{e}")
         # replace cache for this key
         db.query(Bar).filter(Bar.symbol == symbol, Bar.interval == interval, Bar.adjust == adjust).delete()
         for b in bars:

@@ -5,7 +5,7 @@ import { api } from '../api'
 import { useAccount } from '../account'
 import { AccountSelect } from '../components/AccountSelect'
 import { EquityChart } from '../components/EquityChart'
-import { classifyMarket, type MarketKey } from '../lib/markets'
+import { MARKETS, classifyMarket, marketLabel, type MarketKey } from '../lib/markets'
 import { money, moneySigned, pct, pnlClass } from '../lib/format'
 
 type Section = 'overview' | 'positions' | 'orders' | 'create'
@@ -13,12 +13,7 @@ type Section = 'overview' | 'positions' | 'orders' | 'create'
 type PosTab = MarketKey | 'all'
 
 function positionMarket(p: { symbol: string; name: string; currency?: string | null }): MarketKey {
-  if (/GLD|IAU|SGOL|518880|159934|518800/i.test(p.symbol) || /黄金/.test(p.name)) return 'gold'
-  return classifyMarket({
-    symbol: p.symbol,
-    market: p.currency === 'USD' ? 'US' : 'CN',
-    asset_class: p.currency === 'USD' ? 'equity_us' : 'equity_cn',
-  })
+  return classifyMarket({ symbol: p.symbol, name: p.name })
 }
 
 export function Ledger() {
@@ -50,7 +45,7 @@ export function Ledger() {
 
   const [posTab, setPosTab] = useState<PosTab>('all')
   const [cashType, setCashType] = useState<'deposit' | 'withdraw'>('deposit')
-  const [cashCcy, setCashCcy] = useState<'CNY' | 'USD'>('CNY')
+  const [cashCcy, setCashCcy] = useState<'CNY' | 'USD' | 'HKD'>('CNY')
   const [cashAmt, setCashAmt] = useState(10000)
   const [cashMsg, setCashMsg] = useState<string | null>(null)
   const [cashErr, setCashErr] = useState<string | null>(null)
@@ -75,12 +70,39 @@ export function Ledger() {
     enabled: !!accountId && section === 'overview',
   })
 
+  const { data: risk } = useQuery({
+    queryKey: ['risk', accountId],
+    queryFn: () => api.risk(accountId!),
+    enabled: !!accountId && section === 'overview',
+    refetchInterval: 60_000,
+  })
+
   const { data: positions = [], isLoading: posLoading } = useQuery({
     queryKey: ['positions', accountId],
     queryFn: () => api.positions(accountId!),
-    enabled: !!accountId && section === 'positions',
+    enabled: !!accountId && (section === 'positions' || section === 'overview'),
     refetchInterval: 60_000,
   })
+
+  const allocation = useMemo(() => {
+    const base = summary?.currency || account?.currency || 'CNY'
+    const rows: { key: MarketKey; label: string; value: number }[] = []
+    const bucket: Partial<Record<MarketKey, number>> = {}
+    for (const p of positions) {
+      if (p.market_value == null) continue
+      const mk = positionMarket(p)
+      // market_value is in instrument currency; risk uses base — approximate via summary wallets FX not available here.
+      // Prefer risk holdings if present; else sum raw and label (UI shows share of summed MV).
+      bucket[mk] = (bucket[mk] || 0) + p.market_value
+    }
+    const total = Object.values(bucket).reduce((a, b) => a + (b || 0), 0)
+    for (const m of MARKETS) {
+      const v = bucket[m.key] || 0
+      if (v > 0) rows.push({ key: m.key, label: m.label, value: v })
+    }
+    rows.sort((a, b) => b.value - a.value)
+    return { rows, total, base }
+  }, [positions, summary?.currency, account?.currency])
 
   const { data: orders = [] } = useQuery({
     queryKey: ['orders', accountId],
@@ -168,8 +190,11 @@ export function Ledger() {
   const wallets = summary?.wallets || summary?.cash_by_currency || account?.wallets || {}
 
   const posCounts = useMemo(() => {
-    const c: Record<PosTab, number> = { all: positions.length, cn: 0, us: 0, gold: 0 }
-    for (const p of positions) c[positionMarket(p)] += 1
+    const c = { all: positions.length } as Record<PosTab, number>
+    for (const p of positions) {
+      const mk = positionMarket(p)
+      c[mk] = (c[mk] || 0) + 1
+    }
     return c
   }, [positions])
 
@@ -285,6 +310,10 @@ export function Ledger() {
                 <div className="value">{money(wallets.USD ?? 0, 'USD')}</div>
               </div>
               <div className="stat">
+                <div className="label">港币现金</div>
+                <div className="value">{money(wallets.HKD ?? 0, 'HKD')}</div>
+              </div>
+              <div className="stat">
                 <div className="label">持仓市值</div>
                 <div className="value">{money(summary?.market_value, summary?.currency)}</div>
               </div>
@@ -301,6 +330,73 @@ export function Ledger() {
           </section>
 
           <section className="surface">
+            <h2 className="section-title">资产分布</h2>
+            {!allocation.rows.length && <p className="muted">暂无持仓市值</p>}
+            {!!allocation.rows.length && (
+              <div className="alloc-list">
+                {allocation.rows.map((r) => {
+                  const pctShare = allocation.total > 0 ? (r.value / allocation.total) * 100 : 0
+                  return (
+                    <div key={r.key} className="alloc-row">
+                      <div className="row between" style={{ marginBottom: 8 }}>
+                        <span className={`pill ${r.key}`}>{r.label}</span>
+                        <strong className="num">
+                          {pctShare.toFixed(1)}%
+                          <span className="muted" style={{ fontWeight: 500, marginLeft: 8 }}>
+                            {money(r.value, allocation.base)}
+                          </span>
+                        </strong>
+                      </div>
+                      <div className="alloc-bar">
+                        <div className={`alloc-fill ${r.key}`} style={{ width: `${Math.max(pctShare, 1.5)}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <p className="muted mt">点「持仓」里的 基金 / 黄金 筛选，可单独查看。</p>
+          </section>
+
+          <section className="surface">
+            <h2 className="section-title">风险提示</h2>
+            {!risk && <p className="muted">加载中…</p>}
+            {risk && (
+              <>
+                <div className="stat-grid" style={{ marginTop: 0 }}>
+                  <div className="stat">
+                    <div className="label">现金占比</div>
+                    <div className="value">{risk.cash_ratio_pct}%</div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">最大回撤</div>
+                    <div className="value">{risk.max_drawdown_pct}%</div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">最大持仓</div>
+                    <div className="value">
+                      {risk.top_holding
+                        ? `${risk.top_holding.name} ${risk.top_holding.weight_pct ?? 0}%`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">已投资</div>
+                    <div className="value">{risk.invested_ratio_pct}%</div>
+                  </div>
+                </div>
+                <ul className="risk-list">
+                  {risk.alerts.map((a) => (
+                    <li key={a.code + a.message} className={`risk-item ${a.level}`}>
+                      {a.message}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
+
+          <section className="surface">
             <h2 className="section-title">出入金</h2>
             <div className="form-grid form-grid-2">
               <label>
@@ -312,9 +408,13 @@ export function Ledger() {
               </label>
               <label>
                 币种
-                <select value={cashCcy} onChange={(e) => setCashCcy(e.target.value as 'CNY' | 'USD')}>
+                <select
+                  value={cashCcy}
+                  onChange={(e) => setCashCcy(e.target.value as 'CNY' | 'USD' | 'HKD')}
+                >
                   <option value="CNY">CNY</option>
                   <option value="USD">USD</option>
+                  <option value="HKD">HKD</option>
                 </select>
               </label>
               <label>
@@ -411,12 +511,19 @@ export function Ledger() {
         <>
           <div className="chip-row">
             {(
-              [
-                ['all', '全部'],
-                ['cn', 'A股'],
-                ['us', '美股'],
-                ['gold', '黄金'],
-              ] as const
+              (
+                [
+                  ['all', '全部'],
+                  ['cn', 'A股'],
+                  ['hk', '港股'],
+                  ['us', '美股'],
+                  ['fund', '基金'],
+                  ['futures', '期货'],
+                  ['crypto', '加密'],
+                  ['gold', '黄金'],
+                  ['custom', '自定义'],
+                ] as const
+              )
             ).map(([key, label]) => (
               <button
                 key={key}
@@ -444,12 +551,17 @@ export function Ledger() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredPos.map((p) => (
+                  {filteredPos.map((p) => {
+                    const mk = positionMarket(p)
+                    return (
                     <tr key={p.symbol}>
                       <td>
-                        <Link to={`/trade/${encodeURIComponent(p.symbol)}`}>
-                          <strong>{p.name}</strong>
-                        </Link>
+                        <div className="row" style={{ gap: 8, marginBottom: 4 }}>
+                          <Link to={`/trade/${encodeURIComponent(p.symbol)}`}>
+                            <strong>{p.name}</strong>
+                          </Link>
+                          <span className={`pill ${mk}`}>{marketLabel(mk)}</span>
+                        </div>
                         <div className="muted">{p.symbol}</div>
                       </td>
                       <td className="num">{p.qty}</td>
@@ -463,13 +575,13 @@ export function Ledger() {
                         {p.unrealized_pct != null ? ` (${pct(p.unrealized_pct)})` : ''}
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             )}
             <p className="muted mt">
               筛选市值：
-              {(['CNY', 'USD'] as const)
+              {(['CNY', 'USD', 'HKD'] as const)
                 .map((ccy) => {
                   const sum = filteredPos
                     .filter((p) => (p.currency || account?.currency) === ccy)
@@ -490,12 +602,11 @@ export function Ledger() {
             {!orders.length && <div className="empty">暂无成交</div>}
             {orders.map((o) => {
               const mk = classifyMarket({ symbol: o.symbol })
-              const label = mk === 'cn' ? 'A股' : mk === 'us' ? '美股' : '黄金'
               return (
                 <div className="flow-item" key={o.id}>
                   <div className="row between">
                     <div className="row">
-                      <span className={`pill ${mk}`}>{label}</span>
+                      <span className={`pill ${mk}`}>{marketLabel(mk)}</span>
                       <strong>
                         {o.side === 'buy' ? '买' : '卖'}{' '}
                         <Link to={`/trade/${encodeURIComponent(o.symbol)}`}>{o.symbol}</Link>

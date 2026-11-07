@@ -43,8 +43,8 @@ def run_migrations(engine: Engine) -> None:
                     ),
                     {"a": acc_id, "c": cur, "b": bal or 0},
                 )
-            # ensure both CNY and USD rows exist
-            for c in ("CNY", "USD"):
+            # ensure CNY / USD / HKD rows exist
+            for c in ("CNY", "USD", "HKD"):
                 exists = conn.execute(
                     text("SELECT 1 FROM wallet_balances WHERE account_id=:a AND currency=:c"),
                     {"a": acc_id, "c": c},

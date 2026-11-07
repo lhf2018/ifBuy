@@ -6,6 +6,7 @@ import { MarketTabs } from '../components/MarketTabs'
 import {
   MARKETS,
   classifyMarket,
+  marketLabel,
   marketPlaceholder,
   marketSearchParams,
   type MarketKey,
@@ -23,6 +24,12 @@ export function Markets() {
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
 
+  const [custCode, setCustCode] = useState('HOUSE1')
+  const [custName, setCustName] = useState('自住房')
+  const [custPrice, setCustPrice] = useState(3000000)
+  const [custCcy, setCustCcy] = useState<'CNY' | 'USD' | 'HKD'>('CNY')
+  const [custMsg, setCustMsg] = useState<string | null>(null)
+
   const { data: list = [] } = useQuery({ queryKey: ['watchlist'], queryFn: api.watchlist })
 
   const filtered = useMemo(
@@ -31,7 +38,8 @@ export function Markets() {
   )
 
   const counts = useMemo(() => {
-    const c: Partial<Record<MarketKey, number>> = { cn: 0, us: 0, gold: 0 }
+    const c: Partial<Record<MarketKey, number>> = {}
+    for (const m of MARKETS) c[m.key] = 0
     for (const item of list) c[classifyMarket(item)] = (c[classifyMarket(item)] || 0) + 1
     return c
   }, [list])
@@ -53,10 +61,26 @@ export function Markets() {
     mutationFn: (id: number) => api.delWatch(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['watchlist'] }),
   })
+  const createCustom = useMutation({
+    mutationFn: () =>
+      api.createCustom({
+        code: custCode,
+        name: custName,
+        currency: custCcy,
+        price: custPrice,
+      }),
+    onSuccess: async (r) => {
+      setCustMsg(`已创建 ${r.symbol}`)
+      await add.mutateAsync(r.symbol)
+      setResults([r as Instrument])
+    },
+    onError: (e: Error) => setCustMsg(e.message),
+  })
 
   useEffect(() => {
     setResults([])
     setSearchError(null)
+    setCustMsg(null)
     setQ('')
   }, [tab])
 
@@ -70,14 +94,9 @@ export function Markets() {
     try {
       const sp = marketSearchParams(tab)
       const r = keyword.trim()
-        ? await api.search(keyword.trim(), tab === 'gold' ? sp : undefined)
+        ? await api.search(keyword.trim(), tab === 'cn' ? undefined : sp)
         : await api.search('', sp)
-      const scoped =
-        tab === 'gold'
-          ? r.filter((i) => classifyMarket(i) === 'gold')
-          : tab === 'us'
-            ? r.filter((i) => classifyMarket(i) === 'us' || i.market === 'US')
-            : r.filter((i) => classifyMarket(i) === 'cn' || i.market === 'CN')
+      const scoped = r.filter((i) => classifyMarket(i) === tab)
       setResults(scoped.length ? scoped : r)
       if (!(scoped.length || r.length)) setSearchError('没有搜到结果')
     } catch (e) {
@@ -87,6 +106,8 @@ export function Markets() {
       setSearching(false)
     }
   }
+
+  const showHot = tab === 'gold' || tab === 'fund' || tab === 'hk' || tab === 'futures' || tab === 'crypto'
 
   return (
     <>
@@ -107,13 +128,51 @@ export function Markets() {
           <button className="btn-primary" onClick={() => runSearch()} disabled={searching}>
             {searching ? '搜索中…' : '搜索'}
           </button>
-          {tab === 'gold' && (
+          {showHot && (
             <button className="ghost" onClick={() => runSearch('')} disabled={searching}>
-              热门黄金
+              热门{market.label}
             </button>
           )}
         </div>
         {searchError && <p className="warn">{searchError}</p>}
+
+        {tab === 'custom' && (
+          <div className="form-grid form-grid-2" style={{ marginBottom: 20 }}>
+            <label>
+              代码
+              <input value={custCode} onChange={(e) => setCustCode(e.target.value)} placeholder="HOUSE1" />
+            </label>
+            <label>
+              名称
+              <input value={custName} onChange={(e) => setCustName(e.target.value)} placeholder="自住房" />
+            </label>
+            <label>
+              估值
+              <input
+                type="number"
+                value={custPrice}
+                onChange={(e) => setCustPrice(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              币种
+              <select value={custCcy} onChange={(e) => setCustCcy(e.target.value as 'CNY' | 'USD' | 'HKD')}>
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+                <option value="HKD">HKD</option>
+              </select>
+            </label>
+            <div className="form-actions" style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+              <button className="btn-primary" onClick={() => createCustom.mutate()} disabled={createCustom.isPending}>
+                创建/更新自定义资产
+              </button>
+              {custMsg && <span className="muted">{custMsg}</span>}
+            </div>
+            <p className="muted" style={{ gridColumn: '1 / -1', margin: 0 }}>
+              房产、私募份额等无公开行情的标的：手填估值后按「份数 × 估值」计入权益。
+            </p>
+          </div>
+        )}
 
         {!!results.length && (
           <div className="quote-list" style={{ marginBottom: 20 }}>
@@ -142,9 +201,7 @@ export function Markets() {
           </h2>
         </div>
 
-        {!filtered.length && (
-          <div className="empty">暂无关注</div>
-        )}
+        {!filtered.length && <div className="empty">暂无关注</div>}
 
         <div className="quote-list">
           {filtered.map((item) => {
@@ -194,20 +251,23 @@ function InstrumentRow({
   stale?: boolean
   actions: ReactNode
 }) {
-  const label = market === 'cn' ? 'A股' : market === 'us' ? '美股' : '黄金'
   return (
     <div className="quote-row">
       <div className="quote-main">
         <div className="quote-name">
           <strong>{name}</strong>
-          <span className={`pill ${market}`}>{label}</span>
+          <span className={`pill ${market}`}>{marketLabel(market)}</span>
         </div>
         <div className="quote-symbol">{symbol}</div>
       </div>
       <div className={`quote-price ${pnlClass(changePct)}`}>
         {price != null ? fmtPrice(price) : '—'}
         {changePct != null && <div style={{ fontSize: '0.85rem' }}>{pct(changePct)}</div>}
-        {stale && price != null && <div className="muted" style={{ fontSize: '0.75rem' }}>可能过期</div>}
+        {stale && price != null && (
+          <div className="muted" style={{ fontSize: '0.75rem' }}>
+            可能过期
+          </div>
+        )}
       </div>
       <div className="quote-actions">{actions}</div>
     </div>

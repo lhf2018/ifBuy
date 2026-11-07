@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAccount } from '../account'
-import { classifyMarket } from '../lib/markets'
+import { classifyMarket, marketLabel } from '../lib/markets'
 
 export function Orders() {
   const { accountId, account } = useAccount()
@@ -32,7 +32,7 @@ export function Orders() {
         {!data.length && <div className="empty">还没有成交记录。</div>}
         {data.map((o) => {
           const mk = classifyMarket({ symbol: o.symbol })
-          const label = mk === 'cn' ? 'A股' : mk === 'us' ? '美股' : '黄金'
+          const label = marketLabel(mk)
           return (
             <div className="flow-item" key={o.id}>
               <div className="row between">

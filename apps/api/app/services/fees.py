@@ -13,7 +13,17 @@ def _rate(s: str) -> Decimal:
 
 
 def fee_market_key(instrument: Instrument) -> str:
-    """Map instrument to fee bucket: CN / US / GOLD_CN / GOLD_US."""
+    """Map instrument to fee bucket."""
+    if instrument.asset_class == "fund_cn" or instrument.instrument_type == "fund":
+        return "FUND_CN"
+    if instrument.asset_class == "crypto" or instrument.instrument_type == "crypto":
+        return "CRYPTO"
+    if instrument.asset_class == "commodity" or instrument.instrument_type == "future":
+        return "FUT_CN"
+    if instrument.asset_class == "custom" or instrument.instrument_type == "custom":
+        return "CUSTOM"
+    if instrument.asset_class == "equity_hk" or (instrument.market or "").upper() == "HK":
+        return "HK"
     if instrument.asset_class == "gold" or instrument.theme == "gold":
         m = (instrument.market or "CN").upper()
         return "GOLD_US" if m == "US" else "GOLD_CN"
@@ -37,6 +47,34 @@ def get_fee_rule(db: Session, market: str, instrument_type: str | None) -> FeeRu
 
 
 def _default_rule(market: str, instrument_type: str) -> FeeRule:
+    if market == "FUND_CN":
+        return FeeRule(
+            market=market,
+            instrument_type=instrument_type or "fund",
+            buy_commission_rate="0.0015",
+            buy_min_commission_cents=0,
+            buy_stamp_tax_rate="0",
+            buy_transfer_fee_rate="0",
+            sell_commission_rate="0.005",
+            sell_min_commission_cents=0,
+            sell_stamp_tax_rate="0",
+            sell_transfer_fee_rate="0",
+            sell_sec_fee_rate="0",
+        )
+    if market in ("HK", "FUT_CN", "CRYPTO", "CUSTOM"):
+        return FeeRule(
+            market=market,
+            instrument_type=instrument_type,
+            buy_commission_rate="0.00025" if market == "HK" else ("0.0002" if market == "FUT_CN" else "0.001"),
+            buy_min_commission_cents=0,
+            buy_stamp_tax_rate="0.001" if market == "HK" else "0",
+            buy_transfer_fee_rate="0",
+            sell_commission_rate="0.00025" if market == "HK" else ("0.0002" if market == "FUT_CN" else "0.001"),
+            sell_min_commission_cents=0,
+            sell_stamp_tax_rate="0.001" if market == "HK" else "0",
+            sell_transfer_fee_rate="0",
+            sell_sec_fee_rate="0",
+        )
     if market in ("CN", "GOLD_CN") and instrument_type == "etf":
         return FeeRule(
             market=market,
@@ -111,6 +149,11 @@ def _rule_dict(r: FeeRule) -> dict:
         "US": "美股",
         "GOLD_CN": "黄金·国内",
         "GOLD_US": "黄金·美股",
+        "FUND_CN": "基金",
+        "HK": "港股",
+        "FUT_CN": "期货商品",
+        "CRYPTO": "加密货币",
+        "CUSTOM": "自定义",
     }.get(r.market or "", r.market or "")
     return {
         "id": r.id,
@@ -138,6 +181,11 @@ def ensure_fee_rules(db: Session) -> None:
         ("US", "etf", "0", 0, "0", "0", "0", 0, "0", "0", "0"),
         ("GOLD_CN", "etf", "0.00025", 500, "0", "0", "0.00025", 500, "0", "0", "0"),
         ("GOLD_US", "etf", "0", 0, "0", "0", "0", 0, "0", "0", "0"),
+        ("FUND_CN", "fund", "0.0015", 0, "0", "0", "0.005", 0, "0", "0", "0"),
+        ("HK", "equity", "0.00025", 0, "0.001", "0", "0.00025", 0, "0.001", "0", "0"),
+        ("FUT_CN", "future", "0.0002", 0, "0", "0", "0.0002", 0, "0", "0", "0"),
+        ("CRYPTO", "crypto", "0.001", 0, "0", "0", "0.001", 0, "0", "0", "0"),
+        ("CUSTOM", "custom", "0", 0, "0", "0", "0", 0, "0", "0", "0"),
     ]
     for m, it, bc, bmin, bst, btf, sc, smin, sst, stf, ssec in specs:
         exists = (

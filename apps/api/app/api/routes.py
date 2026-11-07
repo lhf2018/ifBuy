@@ -8,12 +8,18 @@ from app.schemas.common import (
     AccountCreate,
     AccountUpdate,
     CashFlowCreate,
+    CustomAssetCreate,
+    CustomPriceUpdate,
+    DividendCreate,
     FxExchangeCreate,
     OrderCreate,
+    SplitCreate,
     WatchlistCreate,
 )
 from app.services import accounts as account_svc
+from app.services import corporate_actions as corp_svc
 from app.services import market as market_svc
+from app.services import risk as risk_svc
 from app.services import trading as trading_svc
 from app.services.fx import get_fx_rate
 from app.services import fees as fee_svc
@@ -133,6 +139,52 @@ def api_list_orders(account_id: int, db: Session = Depends(get_db)):
 @router.get("/accounts/{account_id}/positions")
 def api_list_positions(account_id: int, db: Session = Depends(get_db)):
     return trading_svc.list_positions(db, account_id)
+
+
+@router.get("/accounts/{account_id}/risk")
+def api_risk(account_id: int, db: Session = Depends(get_db)):
+    return risk_svc.risk_report(db, account_id)
+
+
+@router.get("/accounts/{account_id}/corporate-actions")
+def api_list_corp(account_id: int, symbol: str | None = None, db: Session = Depends(get_db)):
+    return corp_svc.list_adjustments(db, account_id, symbol)
+
+
+@router.post("/accounts/{account_id}/dividends")
+def api_dividend(account_id: int, body: DividendCreate, db: Session = Depends(get_db)):
+    return corp_svc.apply_dividend(
+        db, account_id, body.symbol, cash_per_share=body.cash_per_share, note=body.note
+    )
+
+
+@router.post("/accounts/{account_id}/splits")
+def api_split(account_id: int, body: SplitCreate, db: Session = Depends(get_db)):
+    return corp_svc.apply_split(
+        db,
+        account_id,
+        body.symbol,
+        ratio_num=body.ratio_num,
+        ratio_den=body.ratio_den,
+        note=body.note,
+    )
+
+
+@router.post("/instruments/custom")
+def api_create_custom(body: CustomAssetCreate, db: Session = Depends(get_db)):
+    return corp_svc.upsert_custom_asset(
+        db,
+        code=body.code,
+        name=body.name,
+        currency=body.currency,
+        price=body.price,
+        note=body.note,
+    )
+
+
+@router.post("/instruments/{symbol}/valuation")
+def api_custom_valuation(symbol: str, body: CustomPriceUpdate, db: Session = Depends(get_db)):
+    return corp_svc.set_custom_price(db, symbol, body.price, note=body.note)
 
 
 # ---- market ----

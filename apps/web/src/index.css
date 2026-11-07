@@ -17,6 +17,10 @@
   --cn: #e07055;
   --us: #5b8fd9;
   --gold: #c4a05a;
+  --fund: #5aa08a;
+  --hk: #c45c7a;
+  --futures: #7a6a4f;
+  --crypto: #5c7ae0;
   --radius: 20px;
   --radius-sm: 14px;
   --font-display: "Outfit", "Noto Sans SC", sans-serif;
@@ -357,8 +361,8 @@ input[type="number"] {
 
 .market-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 12px;
   margin-bottom: 16px;
 }
 
@@ -632,6 +636,83 @@ label {
 .pill.gold {
   color: var(--gold);
 }
+.pill.fund {
+  color: var(--fund);
+}
+.pill.hk {
+  color: #c45c7a;
+}
+.pill.futures {
+  color: #7a6a4f;
+}
+.pill.crypto {
+  color: #5c7ae0;
+}
+.pill.custom {
+  color: #6b7280;
+}
+
+.risk-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.risk-item {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--neu-in-sm);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.risk-item.warn {
+  color: var(--warn);
+}
+
+.risk-item.ok {
+  color: var(--ok);
+}
+
+.alloc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.alloc-row {
+  min-width: 0;
+}
+
+.alloc-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: var(--neu-in-sm);
+  overflow: hidden;
+}
+
+.alloc-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width var(--ease);
+}
+
+.alloc-fill.cn { background: var(--cn); }
+.alloc-fill.us { background: var(--us); }
+.alloc-fill.hk { background: var(--hk); }
+.alloc-fill.fund { background: var(--fund); }
+.alloc-fill.gold { background: var(--gold); }
+.alloc-fill.futures { background: var(--futures); }
+.alloc-fill.crypto { background: var(--crypto); }
+.alloc-fill.custom { background: #8b919a; }
 
 .quote-symbol {
   color: var(--text-faint);

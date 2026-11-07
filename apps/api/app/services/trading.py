@@ -74,9 +74,13 @@ def place_order(
         if side == "sell" and pos and pos.qty_micros == qty_micros:
             selling_all = True
         if side == "buy" or not selling_all:
-            if instrument.market == "CN":
+            if instrument.instrument_type in ("fund", "crypto", "future", "custom"):
+                if qty_micros <= 0:
+                    raise AppError("LOT_SIZE_VIOLATION", "数量须大于 0。")
+            elif instrument.market in ("CN", "HK"):
                 if qty_micros % qty_to_micros(lot) != 0:
-                    raise AppError("LOT_SIZE_VIOLATION", f"A 股买入数量需为 {lot} 股的整数倍。")
+                    label = "港股" if instrument.market == "HK" else "A 股"
+                    raise AppError("LOT_SIZE_VIOLATION", f"{label}买入数量需为 {lot} 股的整数倍。")
 
         price_source = "api"
         if manual_price is not None:

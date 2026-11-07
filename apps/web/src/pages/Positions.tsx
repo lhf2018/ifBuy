@@ -3,18 +3,13 @@ import { Link } from 'react-router-dom'
 import { useMemo, useState } from 'react'
 import { api } from '../api'
 import { useAccount } from '../account'
-import { classifyMarket, type MarketKey } from '../lib/markets'
+import { MARKETS, classifyMarket, marketLabel, type MarketKey } from '../lib/markets'
 import { money, pct, pnlClass } from '../lib/format'
 
 type Tab = MarketKey | 'all'
 
 function positionMarket(p: { symbol: string; name: string; currency?: string | null }): MarketKey {
-  if (/GLD|IAU|SGOL|518880|159934|518800/i.test(p.symbol) || /黄金/.test(p.name)) return 'gold'
-  return classifyMarket({
-    symbol: p.symbol,
-    market: p.currency === 'USD' ? 'US' : 'CN',
-    asset_class: p.currency === 'USD' ? 'equity_us' : 'equity_cn',
-  })
+  return classifyMarket({ symbol: p.symbol })
 }
 
 export function Positions() {
@@ -28,9 +23,10 @@ export function Positions() {
   })
 
   const counts = useMemo(() => {
-    const c: Record<Tab, number> = { all: data.length, cn: 0, us: 0, gold: 0 }
-    for (const p of data) c[positionMarket(p)] += 1
-    return c
+    const c: Record<string, number> = { all: data.length }
+    for (const m of MARKETS) c[m.key] = 0
+    for (const p of data) c[positionMarket(p)] = (c[positionMarket(p)] || 0) + 1
+    return c as Record<Tab, number>
   }, [data])
 
   const filtered = useMemo(() => {
@@ -55,26 +51,21 @@ export function Positions() {
         </p>
       </div>
 
-      <div className="market-tabs" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
-        {(
-          [
-            ['all', '全部', 'All'],
-            ['cn', 'A股', 'China'],
-            ['us', '美股', 'US'],
-            ['gold', '黄金', 'Gold'],
-          ] as const
-        ).map(([key, label, en]) => (
-          <button
-            key={key}
-            type="button"
-            className={`market-tab market-${key === 'all' ? 'cn' : key} ${tab === key ? 'active' : ''}`}
-            onClick={() => setTab(key)}
-          >
-            <span className="market-tab-en">{en}</span>
-            <span className="market-tab-label">{label}</span>
-            <span className="market-tab-count">{counts[key]}</span>
-          </button>
-        ))}
+      <div className="market-tabs">
+        {([['all', '全部', 'All'], ...MARKETS.map((m) => [m.key, m.label, m.en])] as const).map(
+          ([key, label, en]) => (
+            <button
+              key={key}
+              type="button"
+              className={`market-tab market-${key === 'all' ? 'cn' : key} ${tab === key ? 'active' : ''}`}
+              onClick={() => setTab(key as Tab)}
+            >
+              <span className="market-tab-en">{en}</span>
+              <span className="market-tab-label">{label}</span>
+              <span className="market-tab-count">{counts[key as Tab] || 0}</span>
+            </button>
+          ),
+        )}
       </div>
 
       <section className="surface">
@@ -98,15 +89,17 @@ export function Positions() {
                     <Link to={`/trade/${encodeURIComponent(p.symbol)}`}>
                       <strong>{p.name}</strong>
                     </Link>
-                    <div className="muted">{p.symbol}</div>
+                    <div className="muted">
+                      {p.symbol} · {marketLabel(positionMarket(p))}
+                    </div>
                   </td>
-                  <td>{p.qty}</td>
-                  <td>{p.avg_cost}</td>
-                  <td>
+                  <td className="num">{p.qty}</td>
+                  <td className="num">{p.avg_cost}</td>
+                  <td className="num">
                     {p.price ?? '—'}
                     {p.stale && p.price != null ? ' *' : ''}
                   </td>
-                  <td className={pnlClass(p.unrealized_pnl)}>
+                  <td className={`num ${pnlClass(p.unrealized_pnl)}`}>
                     {p.unrealized_pnl?.toFixed(2) ?? '—'}
                     {p.unrealized_pct != null ? ` (${pct(p.unrealized_pct)})` : ''}
                   </td>
@@ -116,16 +109,11 @@ export function Positions() {
           </table>
         )}
         <p className="muted mt">
-          筛选市值：
-          {(['CNY', 'USD'] as const)
-            .map((ccy) => {
-              const sum = filtered
-                .filter((p) => (p.currency || account?.currency) === ccy)
-                .reduce((s, p) => s + (p.market_value || 0), 0)
-              return sum > 0 ? money(sum, ccy) : null
-            })
-            .filter(Boolean)
-            .join(' · ') || '—'}
+          合计市值：
+          {money(
+            filtered.reduce((s, p) => s + (p.market_value || 0), 0),
+            account?.currency,
+          )}
         </p>
       </section>
     </>

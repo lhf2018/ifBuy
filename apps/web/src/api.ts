@@ -29,7 +29,12 @@ export const api = {
   summary: (id: number) => request<AccountSummary>(`/accounts/${id}/summary`),
   cashFlow: (
     id: number,
-    body: { type: 'deposit' | 'withdraw'; amount: number; currency?: 'CNY' | 'USD'; note?: string },
+    body: {
+      type: 'deposit' | 'withdraw'
+      amount: number
+      currency?: 'CNY' | 'USD' | 'HKD'
+      note?: string
+    },
   ) => request<Account>(`/accounts/${id}/cash-flows`, { method: 'POST', body: JSON.stringify(body) }),
   listCashFlows: (id: number) => request<CashFlowRow[]>(`/accounts/${id}/cash-flows`),
   equityCurve: (id: number, rebuild = false) =>
@@ -68,6 +73,67 @@ export const api = {
   addWatch: (symbol: string) => request('/watchlist', { method: 'POST', body: JSON.stringify({ symbol }) }),
   delWatch: (id: number) => request(`/watchlist/${id}`, { method: 'DELETE' }),
   exportData: () => request<unknown>('/export'),
+  risk: (id: number) => request<RiskReport>(`/accounts/${id}/risk`),
+  listCorpActions: (id: number, symbol?: string) =>
+    request<CorpAction[]>(
+      `/accounts/${id}/corporate-actions${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`,
+    ),
+  dividend: (id: number, body: { symbol: string; cash_per_share: number; note?: string }) =>
+    request<CorpAction>(`/accounts/${id}/dividends`, { method: 'POST', body: JSON.stringify(body) }),
+  split: (id: number, body: { symbol: string; ratio_num: number; ratio_den?: number; note?: string }) =>
+    request<CorpAction>(`/accounts/${id}/splits`, { method: 'POST', body: JSON.stringify(body) }),
+  createCustom: (body: {
+    code: string
+    name: string
+    currency?: 'CNY' | 'USD' | 'HKD'
+    price: number
+    note?: string
+  }) => request<Instrument>('/instruments/custom', { method: 'POST', body: JSON.stringify(body) }),
+  setCustomPrice: (symbol: string, body: { price: number; note?: string }) =>
+    request<{ symbol: string; price: number }>(`/instruments/${encodeURIComponent(symbol)}/valuation`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+}
+
+export type RiskAlert = { level: string; code: string; message: string }
+
+export type RiskReport = {
+  account_id: number
+  base_currency: string
+  total_equity: number
+  cash: number
+  cash_ratio_pct: number
+  invested_ratio_pct: number
+  return_pct: number | null
+  max_drawdown_pct: number
+  max_drawdown_date: string | null
+  top_holding: {
+    symbol: string
+    name: string
+    market_value_base: number
+    weight_pct: number | null
+  } | null
+  holdings: Array<{
+    symbol: string
+    name: string
+    market_value_base: number
+    weight_pct: number | null
+    unrealized_pct: number | null
+  }>
+  alerts: RiskAlert[]
+}
+
+export type CorpAction = {
+  id: number
+  account_id: number
+  symbol: string
+  reason: string
+  qty_delta: number
+  note?: string | null
+  ts?: string | null
+  cash?: number
+  currency?: string
 }
 
 export type Wallets = { CNY?: number; USD?: number; [k: string]: number | undefined }
