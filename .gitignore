@@ -1,0 +1,36 @@
+# Data & secrets
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.local
+secrets.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+apps/web/dist/
+*.local
+
+# IDE / OS
+.idea/
+.vscode/
+.cursor/
+.DS_Store
+Thumbs.db
+
+# Exports
+*.export.json
