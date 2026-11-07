@@ -140,7 +140,6 @@ input[type="number"] {
 }
 
 .nav-links a:hover {
-  box-shadow: 3px 3px 6px var(--shadow-dark), -3px -3px 6px var(--shadow-light);
   color: var(--text);
 }
 
@@ -217,12 +216,8 @@ input[type="number"] {
 }
 
 .account-select.open .account-select-trigger,
-.account-select-trigger:active {
+.account-select-trigger:active:not(:disabled) {
   box-shadow: var(--neu-pressed);
-}
-
-.account-select-trigger:hover:not(:disabled) {
-  box-shadow: var(--neu-out-sm);
 }
 
 .account-select-label {
@@ -315,7 +310,6 @@ input[type="number"] {
 
 .account-select-option:hover:not(:disabled) {
   color: var(--text);
-  box-shadow: var(--neu-out-sm);
 }
 
 .account-select-option.active {
@@ -346,7 +340,6 @@ input[type="number"] {
 
 .subnav-item:hover:not(:disabled) {
   color: var(--text);
-  box-shadow: none;
 }
 
 .subnav-item.active {
@@ -382,11 +375,11 @@ input[type="number"] {
   transition: box-shadow var(--ease);
 }
 
-.market-tab:hover {
-  box-shadow: var(--neu-out-sm);
+.market-tab.active {
+  box-shadow: var(--neu-pressed);
 }
 
-.market-tab.active {
+.market-tab:active:not(.active) {
   box-shadow: var(--neu-pressed);
 }
 
@@ -454,12 +447,7 @@ button {
   transition: box-shadow var(--ease), color var(--ease), opacity var(--ease);
 }
 
-.btn:hover,
-button:hover:not(:disabled) {
-  box-shadow: var(--neu-out-sm);
-}
-
-.btn:active,
+.btn:active:not(:disabled),
 button:active:not(:disabled) {
   box-shadow: var(--neu-pressed);
 }
@@ -477,12 +465,7 @@ button.primary {
   box-shadow: 8px 8px 16px #b8bcc2, -6px -6px 12px #ffffff, inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.btn-primary:hover,
-button.primary:hover:not(:disabled) {
-  box-shadow: 4px 4px 8px #b8bcc2, -3px -3px 6px #ffffff, inset 0 1px 0 rgba(255, 255, 255, 0.2);
-}
-
-.btn-primary:active,
+.btn-primary:active:not(:disabled),
 button.primary:active:not(:disabled) {
   box-shadow: inset 4px 4px 8px rgba(60, 45, 160, 0.45), inset -2px -2px 6px rgba(255, 255, 255, 0.2);
 }
@@ -490,6 +473,11 @@ button.primary:active:not(:disabled) {
 .btn-ghost,
 button.ghost {
   box-shadow: var(--neu-out-sm);
+}
+
+.btn-ghost:active:not(:disabled),
+button.ghost:active:not(:disabled) {
+  box-shadow: var(--neu-pressed);
 }
 
 .btn-buy {
@@ -597,10 +585,6 @@ label {
   background: var(--bg);
   box-shadow: var(--neu-out);
   transition: box-shadow var(--ease);
-}
-
-.quote-row:hover {
-  box-shadow: var(--neu-out-sm);
 }
 
 .quote-main {
@@ -868,10 +852,6 @@ label {
   transition: box-shadow var(--ease);
 }
 
-.gate-card:hover {
-  box-shadow: var(--neu-out-sm);
-}
-
 .gate-card .en {
   color: var(--accent);
   font-size: 0.68rem;
@@ -950,7 +930,6 @@ label {
 }
 
 .segment button:hover:not(:disabled) {
-  box-shadow: none;
   color: var(--text);
 }
 
@@ -980,12 +959,12 @@ label {
   font-weight: 650;
 }
 
-.chip:hover:not(:disabled) {
-  box-shadow: var(--neu-out-sm);
-}
-
 .chip.active {
   color: var(--accent);
+  box-shadow: var(--neu-pressed);
+}
+
+.chip:active:not(:disabled):not(.active) {
   box-shadow: var(--neu-pressed);
 }
 
